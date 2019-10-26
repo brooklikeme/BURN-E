@@ -97,6 +97,7 @@
 #define TURNRIGHT 4
 #define SPINLEFT  5
 #define SPINRIGHT 6
+#define CHOOSEROUTE 7
 
 #define HEAD_SERVO_PIN 2
 #define LEFT_ARM_SERVO_PIN 3
@@ -139,11 +140,17 @@ bool leftIR = false;
 bool rightIR = false;
 
 float leftScale = 1.0;
-float rightScale = 0.9;
-float turnScale = 0.1;
+float rightScale = 0.8;
 
 int trackingStatus = 0; // 0: none, 1: tracking ok, 2: find 
 int motionStatus = 0; 
+float turnScale = 0.0;
+
+unsigned long leftTurnningTime = 0;
+unsigned long rightTurnningTime = 0;
+unsigned long chooseRouteTime = 0;
+unsigned long chooseRouteInterval = 8000;
+unsigned long turnningDelayTime = 500;
 
 void setup() {
     //串口初始化
@@ -154,6 +161,9 @@ void setup() {
   pinMode(LEFT_IR_PIN, INPUT);
   pinMode(RIGHT_IR_PIN, INPUT); 
   pinMode(BUZZER_PIN, OUTPUT);
+
+  randomSeed(analogRead(A1));
+  
   // init servos
   headServo.attach(HEAD_SERVO_PIN);
   leftArmServo.attach(LEFT_ARM_SERVO_PIN);
@@ -171,12 +181,38 @@ void setup() {
   }
 }
 
+void sweep() {
+  for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
+    // in steps of 1 degree
+    myservo.write(pos);              // tell servo to go to position in variable 'pos'
+    delay(15);                       // waits 15ms for the servo to reach the position
+  }
+  for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
+    myservo.write(pos);              // tell servo to go to position in variable 'pos'
+    delay(15);                       // waits 15ms for the servo to reach the position
+  }
+}
+
 void speak(int what) {
   return;
 }
 
 void action(int what) {
   
+}
+
+int chooseRoute() {
+  // speak
+  // look left
+  headServo.write(45);
+  delay(1000);
+  // look right
+  headServo.write(135);
+  delay(1000);
+  // look forward
+  headServo.write(90);
+  delay(1000);
+  return random(1, 3);
 }
 
 void getIRStatus() {
@@ -189,6 +225,7 @@ void getIRStatus() {
 void servoRun(int cmd,int speedValue) // speed from 0 - 100
 {
   int realSpeed = 90;
+  unsigned long currentTime = millis();
   switch(cmd){
     case FORWARD:
       Serial.println("FORWARD"); //输出状态
@@ -212,12 +249,12 @@ void servoRun(int cmd,int speedValue) // speed from 0 - 100
       leftWheelServo.write(realSpeed);
       realSpeed = map(speedValue * rightScale, 0, 100, 90, 0);   
       rightWheelServo.write(realSpeed);
-      //delay(15);
+      delay(10);
       break;
      case TURNRIGHT:
       Serial.println("TURN  RIGHT"); //输出状态
       realSpeed = map(speedValue * leftScale, 0, 100, 91, 180);
-      leftWheelServo.write(realSpeed);
+      leftWheelServo.write(realSpeed); 
       realSpeed = map(speedValue * rightScale * turnScale, 0, 100, 90, 0);
       rightWheelServo.write(realSpeed);
       delay(10);
@@ -249,24 +286,49 @@ void servoRun(int cmd,int speedValue) // speed from 0 - 100
 void tracingLine() {
   getIRStatus();
 
+  unsigned long currentTime = millis();
+  
   if(!frontLeftIR && !frontRightIR)  
   {
-    motionStatus = FORWARD;
-    servoRun(FORWARD, 40);
+    if (currentTime - leftTurnningTime < turnningDelayTime) {
+      servoRun(TURNLEFT, 25);
+    } else {
+      leftTurnningTime = 0;
+      motionStatus = FORWARD;
+      servoRun(FORWARD, 30);
+    }
+    if (currentTime - rightTurnningTime < turnningDelayTime) {
+      servoRun(TURNRIGHT, 25);
+    } else {
+      rightTurnningTime = 0;
+      motionStatus = FORWARD;
+      servoRun(FORWARD, 30);
+    }
   } else if (!frontLeftIR && frontRightIR) {
     motionStatus = TURNRIGHT;
-    servoRun(TURNRIGHT, 20);
+    rightTurnningTime = millis();      
+    servoRun(TURNRIGHT, 25);
   } else if (frontLeftIR && !frontRightIR) {
     motionStatus = TURNLEFT;
-    servoRun(TURNLEFT, 20);
-  } else if (frontLeftIR && frontRightIR) {
-    // check motion status
-    if (motionStatus == TURNLEFT || motionStatus == TURNRIGHT) {
-      ;
-    } else {
-      motionStatus = STOP;
-      servoRun(STOP, 20);
-    }
+    leftTurnningTime = millis();      
+    servoRun(TURNLEFT, 25);
+  } else if (!leftIR && !rightIR && frontLeftIR && frontRightIR) {
+    if (motionStatus == CHOOSEROUTE) {
+      // do nothing;
+    } else if(currentTime - chooseRouteTime > chooseRouteInterval) {
+      chooseRouteTime = millis();
+      motionStatus = CHOOSEROUTE;
+      servoRun(STOP, 25);
+      delay()
+      // two routes, 
+      if (chooseRoute() == 1) {
+        // choose left route
+        servoRun(SPINLEFT, 25);
+      } else {
+        // choose right route
+        servoRun(SPINRIGHT, 25);
+      }      
+    } 
   }
   
   Serial.print(frontLeftIR);
@@ -285,6 +347,6 @@ void loop() {
   // put your main code here, to run repeatedly:
   tracingLine();
 
-  delay(50);
+  delay(10);
 
 }
