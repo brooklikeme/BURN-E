@@ -90,6 +90,7 @@
 #define NOTE_D8  4699
 #define NOTE_DS8 4978
 
+// define motion status
 #define STOP      0
 #define FORWARD   1
 #define BACKWARD  2
@@ -98,6 +99,7 @@
 #define SPINLEFT  5
 #define SPINRIGHT 6
 #define CHOOSEROUTE 7
+#define REPAIR 8
 
 #define HEAD_SERVO_PIN 2
 #define LEFT_ARM_SERVO_PIN 3
@@ -118,12 +120,11 @@
 #define LEFT_IR_PIN 10
 #define RIGHT_IR_PIN 11
 
-Servo headServo;
-Servo leftArmServo;
-Servo rightArmServo;
-Servo waistServo;
+Servo servos[4];
 Servo leftWheelServo;
 Servo rightWheelServo;
+
+int servoActionArray[4][2];
 
 // notes in the melody:
 int melody[] = {
@@ -151,6 +152,9 @@ unsigned long rightTurnningTime = 0;
 unsigned long chooseRouteTime = 0;
 unsigned long chooseRouteInterval = 8000;
 unsigned long turnningDelayTime = 500;
+unsigned long postDetectedTime = 0;
+unsigned long postRepairDelayTime = 2000;
+unsigned long postDetectedInterval = 5000;
 
 void setup() {
     //串口初始化
@@ -165,10 +169,10 @@ void setup() {
   randomSeed(analogRead(A1));
   
   // init servos
-  headServo.attach(HEAD_SERVO_PIN);
-  leftArmServo.attach(LEFT_ARM_SERVO_PIN);
-  rightArmServo.attach(RIGHT_ARM_SERVO_PIN);
-  waistServo.attach(WAIST_SERVO_PIN);
+  servos[0].attach(HEAD_SERVO_PIN);
+  servos[1].attach(LEFT_ARM_SERVO_PIN);
+  servos[2].attach(RIGHT_ARM_SERVO_PIN);
+  servos[3].attach(WAIST_SERVO_PIN);
   leftWheelServo.attach(LEFT_WHEEL_SERVO_PIN);
   rightWheelServo.attach(RIGHT_WHEEL_SERVO_PIN);
 
@@ -181,16 +185,51 @@ void setup() {
   }
 }
 
-void sweep() {
-  for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
-    // in steps of 1 degree
-    myservo.write(pos);              // tell servo to go to position in variable 'pos'
-    delay(15);                       // waits 15ms for the servo to reach the position
+void initServoActionArray() {
+  for (int i = 0; i < 4; i ++) {
+    for (int j = 0; j < 2; j ++) {
+      servoActionArray[i][j] = -1;    
+    }
+  } 
+}
+
+void sweepServos(int duration) {
+  int maxAngleIndex = 0;
+  int maxAngleStart = 0;
+  int maxAngleEnd = 0;
+  int realAngle = 0;
+  for (int i = 0; i < 4; i ++) {
+    if (servoActionArray[i][0] >= 0 && (abs(maxAngleEnd - maxAngleStart) < abs(servoActionArray[i][1] - servoActionArray[i][0]))) {
+      maxAngleStart = servoActionArray[i][0];
+      maxAngleEnd = servoActionArray[i][1];
+      maxAngleIndex = i;
+    }
   }
-  for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
-    myservo.write(pos);              // tell servo to go to position in variable 'pos'
-    delay(15);                       // waits 15ms for the servo to reach the position
-  }
+  if (abs(maxAngleEnd - maxAngleStart) == 0) return;
+  int delayMillis = duration / abs(maxAngleEnd - maxAngleStart);
+  bool ascending = maxAngleEnd > maxAngleStart;
+  Serial.print(maxAngleStart);
+  Serial.print("---");
+  Serial.print(maxAngleEnd);
+  Serial.print("---");
+  Serial.println(delayMillis);  
+  for (int pos = maxAngleStart; ascending ? (pos <= maxAngleEnd) : (pos >= maxAngleEnd); ascending ? pos ++ : pos --) {
+    servos[maxAngleIndex].write(pos);
+    Serial.println(pos); 
+    for (int i = 0; i < 4; i ++) {
+      if (servoActionArray[i][0] >=0 && i != maxAngleIndex) {
+        realAngle = map(pos, maxAngleStart, maxAngleEnd, servoActionArray[i][0], servoActionArray[i][1]);
+        servos[i].write(realAngle);
+      }
+    }  
+    delay(delayMillis);
+  }     
+ 
+  //Serial.print(maxAngleStart);
+  //Serial.print("---");
+  //Serial.print(maxAngleEnd);
+  //Serial.print("---");
+  //Serial.println(delayMillis);      
 }
 
 void speak(int what) {
@@ -203,16 +242,53 @@ void action(int what) {
 
 int chooseRoute() {
   // speak
-  // look left
-  headServo.write(45);
-  delay(1000);
-  // look right
-  headServo.write(135);
-  delay(1000);
   // look forward
-  headServo.write(90);
-  delay(1000);
-  return random(1, 3);
+  servos[0].write(90);
+  delay(50);  
+  // look left
+  initServoActionArray();
+  servoActionArray[0][0] = 90;
+  servoActionArray[0][1] = 45;
+  servoActionArray[1][0] = 90;
+  servoActionArray[1][1] = 45;
+  servoActionArray[2][0] = 90;
+  servoActionArray[2][1] = 135;
+  sweepServos(500);
+  // look right
+  initServoActionArray();
+  servoActionArray[0][0] = 45;
+  servoActionArray[0][1] = 135;
+  servoActionArray[1][0] = 45;
+  servoActionArray[1][1] = 90;
+  servoActionArray[2][0] = 135;
+  servoActionArray[2][1] = 90;  
+  sweepServos(1000);
+  // look forward
+  initServoActionArray();
+  servoActionArray[0][0] = 135;
+  servoActionArray[0][1] = 90;
+  sweepServos(500);
+  // return random direction
+  int selectedRoute =  random(1, 3);
+  if (selectedRoute == 1) {
+    initServoActionArray();
+    servoActionArray[1][0] = 90;
+    servoActionArray[1][1] = 30;
+    sweepServos(1000);    
+    servoActionArray[1][0] = 30;
+    servoActionArray[1][1] = 90;
+    sweepServos(500);   
+  } else {
+    initServoActionArray();
+    servoActionArray[2][0] = 90;
+    servoActionArray[2][1] = 150;
+    sweepServos(1000);    
+    servoActionArray[2][0] = 150;
+    servoActionArray[2][1] = 90;
+    sweepServos(500);    
+  }
+
+  return selectedRoute;
 }
 
 void getIRStatus() {
@@ -287,9 +363,21 @@ void tracingLine() {
   getIRStatus();
 
   unsigned long currentTime = millis();
-  
+
+  // detect lamp post
+  if ((leftIR || rightIR) && currentTime - chooseRouteTime > postDetectedInterval) {
+    postDetectedTime = currentTime;
+  }
+
+  if (motionStatus == BACKWARD) return;
   if(!frontLeftIR && !frontRightIR)  
   {
+    if (postDetectedTime > 0 && currentTime - postDetectedTime > postRepairDelayTime) {
+      motionStatus = BACKWARD;
+      postDetectedTime = 0;
+      servoRun(BACKWARD, 30);
+      return;
+    }
     if (currentTime - leftTurnningTime < turnningDelayTime) {
       servoRun(TURNLEFT, 25);
     } else {
@@ -319,7 +407,6 @@ void tracingLine() {
       chooseRouteTime = millis();
       motionStatus = CHOOSEROUTE;
       servoRun(STOP, 25);
-      delay()
       // two routes, 
       if (chooseRoute() == 1) {
         // choose left route
@@ -346,6 +433,7 @@ void tracingLine() {
 void loop() {
   // put your main code here, to run repeatedly:
   tracingLine();
+  // chooseRoute();
 
   delay(10);
 
