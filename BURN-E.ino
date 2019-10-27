@@ -99,7 +99,8 @@
 #define SPINLEFT  5
 #define SPINRIGHT 6
 #define CHOOSEROUTE 7
-#define REPAIR 8
+#define BEFOREREPAIR 8
+#define AFTERREPAIR 9
 
 #define HEAD_SERVO_PIN 2
 #define LEFT_ARM_SERVO_PIN 3
@@ -150,11 +151,15 @@ float turnScale = 0.0;
 unsigned long leftTurnningTime = 0;
 unsigned long rightTurnningTime = 0;
 unsigned long chooseRouteTime = 0;
-unsigned long chooseRouteInterval = 8000;
+unsigned long chooseRouteInterval = 3000;
 unsigned long turnningDelayTime = 500;
 unsigned long postDetectedTime = 0;
-unsigned long postRepairDelayTime = 2000;
-unsigned long postDetectedInterval = 5000;
+unsigned long postRepairInterval = 5000;
+unsigned long postDetectedInterval = 3000;
+unsigned long postSpinInterval = 1000;
+unsigned long postFinishedTime = 0;
+
+bool postDetectedLeft = true;
 
 void setup() {
     //串口初始化
@@ -249,19 +254,11 @@ int chooseRoute() {
   initServoActionArray();
   servoActionArray[0][0] = 90;
   servoActionArray[0][1] = 45;
-  servoActionArray[1][0] = 90;
-  servoActionArray[1][1] = 45;
-  servoActionArray[2][0] = 90;
-  servoActionArray[2][1] = 135;
   sweepServos(500);
   // look right
   initServoActionArray();
   servoActionArray[0][0] = 45;
-  servoActionArray[0][1] = 135;
-  servoActionArray[1][0] = 45;
-  servoActionArray[1][1] = 90;
-  servoActionArray[2][0] = 135;
-  servoActionArray[2][1] = 90;  
+  servoActionArray[0][1] = 135; 
   sweepServos(1000);
   // look forward
   initServoActionArray();
@@ -289,6 +286,38 @@ int chooseRoute() {
   }
 
   return selectedRoute;
+}
+
+void lookAtPost(bool left) {
+  servos[0].write(90);
+  delay(50);  
+  initServoActionArray();
+  if (!left) {
+    servoActionArray[0][0] = 90;
+    servoActionArray[0][1] = 45;    
+  } else {
+    servoActionArray[0][0] = 90;
+    servoActionArray[0][1] = 135;        
+  }
+  sweepServos(500);
+  if (!left) {
+    servoActionArray[0][0] = 45;
+    servoActionArray[0][1] = 90;    
+  } else {
+    servoActionArray[0][0] = 135;
+    servoActionArray[0][1] = 90;        
+  }  
+  sweepServos(500);  
+}
+
+void repairPost() {
+  initServoActionArray();
+  servoActionArray[3][0] = 90;
+  servoActionArray[3][1] = 75;  
+  sweepServos(1000);  
+  servoActionArray[3][0] = 75;
+  servoActionArray[3][1] = 90;  
+  sweepServos(1000);  
 }
 
 void getIRStatus() {
@@ -334,7 +363,7 @@ void servoRun(int cmd,int speedValue) // speed from 0 - 100
       realSpeed = map(speedValue * rightScale * turnScale, 0, 100, 90, 0);
       rightWheelServo.write(realSpeed);
       delay(10);
-      break;      
+      break;             
      case SPINLEFT:
       Serial.println("SPIN  LEFT"); //输出状态
       realSpeed = map(speedValue * leftScale, 0, 100, 90, 0);      
@@ -365,25 +394,30 @@ void tracingLine() {
   unsigned long currentTime = millis();
 
   // detect lamp post
-  if ((leftIR || rightIR) && currentTime - chooseRouteTime > postDetectedInterval) {
-    postDetectedTime = currentTime;
-  }
-
-  if (motionStatus == BACKWARD) return;
-  if(!frontLeftIR && !frontRightIR)  
-  {
-    if (postDetectedTime > 0 && currentTime - postDetectedTime > postRepairDelayTime) {
-      motionStatus = BACKWARD;
-      postDetectedTime = 0;
-      servoRun(BACKWARD, 30);
-      return;
-    }
+  if (motionStatus != BEFOREREPAIR && motionStatus != AFTERREPAIR 
+    && currentTime - chooseRouteTime > postDetectedInterval 
+    && currentTime - postDetectedTime > postRepairInterval
+    && (leftIR && !rightIR || !leftIR && rightIR)) {
+    postDetectedLeft = leftIR;
+    servoRun(STOP, 20);    
+    motionStatus = BEFOREREPAIR;    
+    if (postDetectedLeft) {
+      // choose left route
+      servoRun(SPINLEFT, 25);
+    } else {
+      // choose right route
+      servoRun(SPINRIGHT, 25);
+    }         
+    postDetectedTime = currentTime;      
+  } else if (motionStatus != BEFOREREPAIR && motionStatus != AFTERREPAIR && !frontLeftIR && !frontRightIR) {
     if (currentTime - leftTurnningTime < turnningDelayTime) {
       servoRun(TURNLEFT, 25);
     } else {
       leftTurnningTime = 0;
-      motionStatus = FORWARD;
       servoRun(FORWARD, 30);
+      if (motionStatus != BACKWARD) {
+        motionStatus = FORWARD;
+      }
     }
     if (currentTime - rightTurnningTime < turnningDelayTime) {
       servoRun(TURNRIGHT, 25);
@@ -391,20 +425,54 @@ void tracingLine() {
       rightTurnningTime = 0;
       motionStatus = FORWARD;
       servoRun(FORWARD, 30);
-    }
+    }     
   } else if (!frontLeftIR && frontRightIR) {
-    motionStatus = TURNRIGHT;
-    rightTurnningTime = millis();      
-    servoRun(TURNRIGHT, 25);
+    if (motionStatus == BEFOREREPAIR) {
+      if (postDetectedLeft && currentTime -  postDetectedTime > postSpinInterval) {
+        servoRun(STOP, 20);
+        // start repair
+        repairPost();
+        // spin back
+        motionStatus = AFTERREPAIR;    
+        servoRun(SPINRIGHT, 25);  
+        postFinishedTime = currentTime; 
+      }
+    }  else if (motionStatus == AFTERREPAIR) {
+      if (!postDetectedLeft && currentTime -  postFinishedTime > postSpinInterval) {
+        servoRun(STOP, 20);
+        motionStatus = FORWARD;
+      }
+    } else {
+      rightTurnningTime = millis();      
+      servoRun(TURNRIGHT, 25);
+      motionStatus = TURNRIGHT;   
+    }
   } else if (frontLeftIR && !frontRightIR) {
-    motionStatus = TURNLEFT;
-    leftTurnningTime = millis();      
-    servoRun(TURNLEFT, 25);
-  } else if (!leftIR && !rightIR && frontLeftIR && frontRightIR) {
+    if (motionStatus == BEFOREREPAIR) {
+      if (!postDetectedLeft && currentTime -  postDetectedTime > postSpinInterval) {
+        servoRun(STOP, 20);
+        // start repair
+        repairPost();
+        // spin back
+        motionStatus = AFTERREPAIR;    
+        servoRun(SPINLEFT, 25);     
+        postFinishedTime = currentTime;    
+      }
+    } else if (motionStatus == AFTERREPAIR) {
+      if (postDetectedLeft && currentTime -  postFinishedTime > postSpinInterval) {
+        servoRun(STOP, 20);
+        motionStatus = FORWARD;
+      }
+    } else {
+      leftTurnningTime = millis();      
+      servoRun(TURNLEFT, 25);
+      motionStatus = TURNRIGHT;   
+    }
+  } else if (motionStatus != BEFOREREPAIR && motionStatus != AFTERREPAIR 
+    && !leftIR && !rightIR && frontLeftIR && frontRightIR) {
     if (motionStatus == CHOOSEROUTE) {
       // do nothing;
     } else if(currentTime - chooseRouteTime > chooseRouteInterval) {
-      chooseRouteTime = millis();
       motionStatus = CHOOSEROUTE;
       servoRun(STOP, 25);
       // two routes, 
@@ -414,7 +482,8 @@ void tracingLine() {
       } else {
         // choose right route
         servoRun(SPINRIGHT, 25);
-      }      
+      }   
+      chooseRouteTime = millis();   
     } 
   }
   
