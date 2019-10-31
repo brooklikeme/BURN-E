@@ -408,7 +408,7 @@ void tracingLine() {
       // choose right route
       servoRun(SPINRIGHT, 25);
     }         
-    postDetectedTime = currentTime;      
+    postDetectedTime = millis();      
   } else if (motionStatus != BEFOREREPAIR && motionStatus != AFTERREPAIR && !frontLeftIR && !frontRightIR) {
     if (currentTime - leftTurnningTime < turnningDelayTime) {
       servoRun(TURNLEFT, 25);
@@ -433,9 +433,9 @@ void tracingLine() {
         // start repair
         repairPost();
         // spin back
-        motionStatus = AFTERREPAIR;    
         servoRun(SPINRIGHT, 25);  
-        postFinishedTime = currentTime; 
+        postFinishedTime = millis(); 
+        motionStatus = AFTERREPAIR;    
       }
     }  else if (motionStatus == AFTERREPAIR) {
       if (!postDetectedLeft && currentTime -  postFinishedTime > postSpinInterval) {
@@ -453,10 +453,10 @@ void tracingLine() {
         servoRun(STOP, 20);
         // start repair
         repairPost();
-        // spin back
-        motionStatus = AFTERREPAIR;    
+        // spin back    
         servoRun(SPINLEFT, 25);     
-        postFinishedTime = currentTime;    
+        postFinishedTime = millis();
+        motionStatus = AFTERREPAIR;           
       }
     } else if (motionStatus == AFTERREPAIR) {
       if (postDetectedLeft && currentTime -  postFinishedTime > postSpinInterval) {
